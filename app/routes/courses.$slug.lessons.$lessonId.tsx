@@ -23,6 +23,7 @@ import {
 import {
   createLessonComment,
   getLessonDiscussion,
+  softDeleteLessonComment,
   type LessonDiscussionThread,
   updateLessonComment,
 } from "~/services/commentService";
@@ -84,6 +85,11 @@ const editCommentSchema = z.object({
   intent: z.literal("edit-comment"),
   commentId: z.coerce.number().int().positive(),
   body: z.string().trim().min(1, "Comment cannot be empty").max(5000),
+});
+
+const deleteCommentSchema = z.object({
+  intent: z.literal("delete-comment"),
+  commentId: z.coerce.number().int().positive(),
 });
 
 export function meta({ data: loaderData }: Route.MetaArgs) {
@@ -384,6 +390,36 @@ export async function action({ params, request }: Route.ActionArgs) {
       return data(
         {
           errors: { body: message },
+          success: false,
+        },
+        { status: 403 }
+      );
+    }
+  }
+
+  if (intent === "delete-comment") {
+    const parsed = parseFormData(formData, deleteCommentSchema);
+
+    if (!parsed.success) {
+      return data(
+        {
+          errors: parsed.errors,
+          success: false,
+        },
+        { status: 400 }
+      );
+    }
+
+    try {
+      softDeleteLessonComment(currentUserId, parsed.data.commentId);
+      return { success: true };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to delete comment";
+
+      return data(
+        {
+          errors: { commentId: message },
           success: false,
         },
         { status: 403 }
@@ -766,6 +802,10 @@ function LessonDiscussionSection({
     success?: boolean;
     errors?: Record<string, string>;
   }>({ key: "edit-comment" });
+  const deleteFetcher = useFetcher<{
+    success?: boolean;
+    errors?: Record<string, string>;
+  }>({ key: "delete-comment" });
   const [draft, setDraft] = useState("");
   const [replyingTo, setReplyingTo] = useState<number | null>(null);
   const [replyDraft, setReplyDraft] = useState("");
@@ -774,6 +814,7 @@ function LessonDiscussionSection({
   const isCreatingComment = createCommentFetcher.state !== "idle";
   const isCreatingReply = replyFetcher.state !== "idle";
   const isEditingComment = editFetcher.state !== "idle";
+  const isDeletingComment = deleteFetcher.state !== "idle";
 
   useEffect(() => {
     if (createCommentFetcher.state === "idle" && createCommentFetcher.data?.success) {
@@ -826,6 +867,11 @@ function LessonDiscussionSection({
             {createCommentFetcher.data?.errors?.body && (
               <p className="text-sm text-destructive">
                 {createCommentFetcher.data.errors.body}
+              </p>
+            )}
+            {deleteFetcher.data?.errors?.commentId && (
+              <p className="text-sm text-destructive">
+                {deleteFetcher.data.errors.commentId}
               </p>
             )}
             <div className="flex justify-end">
@@ -891,10 +937,10 @@ function LessonDiscussionSection({
                       createdAt={thread.createdAt}
                       isInstructor={thread.userId === courseInstructorId}
                     />
-                    <p className="whitespace-pre-wrap text-sm leading-6">
-                      {thread.body}
+                    <p className="whitespace-pre-wrap text-sm leading-6 text-muted-foreground">
+                      {thread.deletedAt ? "[comment deleted]" : thread.body}
                     </p>
-                    {thread.updatedAt !== thread.createdAt && (
+                    {thread.deletedAt === null && thread.updatedAt !== thread.createdAt && (
                       <p className="text-xs text-muted-foreground">Edited</p>
                     )}
                   </>
@@ -906,31 +952,49 @@ function LessonDiscussionSection({
                     currentUserId,
                     courseInstructorId,
                     thread.deletedAt
-                  ) && editingCommentId !== thread.id && (
+                  ) && thread.deletedAt === null && (
+                    <>
+                      {editingCommentId !== thread.id && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => beginEditing(thread.id, thread.body)}
+                        >
+                          Edit
+                        </Button>
+                      )}
+                      <deleteFetcher.Form method="post">
+                        <input type="hidden" name="intent" value="delete-comment" />
+                        <input type="hidden" name="commentId" value={thread.id} />
+                        <Button
+                          type="submit"
+                          variant="ghost"
+                          size="sm"
+                          disabled={isDeletingComment}
+                        >
+                          Delete
+                        </Button>
+                      </deleteFetcher.Form>
+                    </>
+                  )}
+                  {thread.deletedAt === null && (
                     <Button
                       type="button"
                       variant="ghost"
                       size="sm"
-                      onClick={() => beginEditing(thread.id, thread.body)}
+                      onClick={() => {
+                        setEditingCommentId(null);
+                        setEditDraft("");
+                        setReplyingTo((current) =>
+                          current === thread.id ? null : thread.id
+                        );
+                        setReplyDraft("");
+                      }}
                     >
-                      Edit
+                      Reply
                     </Button>
                   )}
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setEditingCommentId(null);
-                      setEditDraft("");
-                      setReplyingTo((current) =>
-                        current === thread.id ? null : thread.id
-                      );
-                      setReplyDraft("");
-                    }}
-                  >
-                    Reply
-                  </Button>
                 </div>
 
                 {replyingTo === thread.id && (
@@ -1015,10 +1079,10 @@ function LessonDiscussionSection({
                               createdAt={reply.createdAt}
                               isInstructor={reply.userId === courseInstructorId}
                             />
-                            <p className="whitespace-pre-wrap leading-6">
-                              {reply.body}
+                            <p className="whitespace-pre-wrap leading-6 text-muted-foreground">
+                              {reply.deletedAt ? "[comment deleted]" : reply.body}
                             </p>
-                            {reply.updatedAt !== reply.createdAt && (
+                            {reply.deletedAt === null && reply.updatedAt !== reply.createdAt && (
                               <p className="mt-2 text-xs text-muted-foreground">
                                 Edited
                               </p>
@@ -1028,8 +1092,8 @@ function LessonDiscussionSection({
                               currentUserId,
                               courseInstructorId,
                               reply.deletedAt
-                            ) && (
-                              <div className="mt-2 flex justify-end">
+                            ) && reply.deletedAt === null && (
+                              <div className="mt-2 flex justify-end gap-2">
                                 <Button
                                   type="button"
                                   variant="ghost"
@@ -1038,6 +1102,18 @@ function LessonDiscussionSection({
                                 >
                                   Edit
                                 </Button>
+                                <deleteFetcher.Form method="post">
+                                  <input type="hidden" name="intent" value="delete-comment" />
+                                  <input type="hidden" name="commentId" value={reply.id} />
+                                  <Button
+                                    type="submit"
+                                    variant="ghost"
+                                    size="sm"
+                                    disabled={isDeletingComment}
+                                  >
+                                    Delete
+                                  </Button>
+                                </deleteFetcher.Form>
                               </div>
                             )}
                           </>

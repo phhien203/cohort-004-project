@@ -73,6 +73,7 @@ export function createLessonComment(
         id: lessonComments.id,
         lessonId: lessonComments.lessonId,
         parentId: lessonComments.parentId,
+        deletedAt: lessonComments.deletedAt,
       })
       .from(lessonComments)
       .where(eq(lessonComments.id, parentId))
@@ -84,6 +85,10 @@ export function createLessonComment(
 
     if (parentComment.parentId !== null) {
       throw new Error("Replies can only be added to top-level comments");
+    }
+
+    if (parentComment.deletedAt !== null) {
+      throw new Error("Replies cannot be added to deleted comments");
     }
   }
 
@@ -194,6 +199,49 @@ export function updateLessonComment(
     .set({
       body,
       updatedAt: new Date().toISOString(),
+    })
+    .where(eq(lessonComments.id, commentId))
+    .returning()
+    .get();
+}
+
+export function softDeleteLessonComment(currentUserId: number, commentId: number) {
+  const existingComment = db
+    .select({
+      id: lessonComments.id,
+      userId: lessonComments.userId,
+      deletedAt: lessonComments.deletedAt,
+      courseInstructorId: courses.instructorId,
+    })
+    .from(lessonComments)
+    .innerJoin(lessons, eq(lessonComments.lessonId, lessons.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .innerJoin(courses, eq(modules.courseId, courses.id))
+    .where(eq(lessonComments.id, commentId))
+    .get();
+
+  if (!existingComment) {
+    throw new Error("Comment not found");
+  }
+
+  if (
+    !canModifyComment(
+      existingComment.userId,
+      currentUserId,
+      existingComment.courseInstructorId
+    )
+  ) {
+    throw new Error("You do not have access to delete this comment");
+  }
+
+  if (existingComment.deletedAt !== null) {
+    return existingComment;
+  }
+
+  return db
+    .update(lessonComments)
+    .set({
+      deletedAt: new Date().toISOString(),
     })
     .where(eq(lessonComments.id, commentId))
     .returning()

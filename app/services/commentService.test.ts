@@ -14,6 +14,7 @@ vi.mock("~/db", () => ({
 import {
   createLessonComment,
   getLessonDiscussion,
+  softDeleteLessonComment,
   updateLessonComment,
 } from "./commentService";
 
@@ -327,6 +328,85 @@ describe("commentService", () => {
       expect(() =>
         updateLessonComment(outsider.id, comment.id, "Should fail")
       ).toThrow("You do not have access to edit this comment");
+    });
+  });
+
+  describe("softDeleteLessonComment", () => {
+    it("allows an author to soft-delete their own comment without replies", () => {
+      const lesson = createLesson(base.course.id);
+
+      testDb
+        .insert(schema.enrollments)
+        .values({
+          userId: base.user.id,
+          courseId: base.course.id,
+        })
+        .run();
+
+      const comment = createLessonComment(
+        base.user.id,
+        lesson.id,
+        "Temporary note"
+      );
+      const deleted = softDeleteLessonComment(base.user.id, comment.id);
+
+      expect(deleted.deletedAt).toBeDefined();
+
+      const discussion = getLessonDiscussion(lesson.id);
+      expect(discussion[0].deletedAt).not.toBeNull();
+    });
+
+    it("allows the course instructor to soft-delete a thread that has replies", () => {
+      const lesson = createLesson(base.course.id);
+
+      testDb
+        .insert(schema.enrollments)
+        .values({
+          userId: base.user.id,
+          courseId: base.course.id,
+        })
+        .run();
+
+      const parent = createLessonComment(
+        base.user.id,
+        lesson.id,
+        "Student question"
+      );
+      createLessonComment(
+        base.instructor.id,
+        lesson.id,
+        "Instructor answer",
+        parent.id
+      );
+
+      softDeleteLessonComment(base.instructor.id, parent.id);
+
+      const discussion = getLessonDiscussion(lesson.id);
+      expect(discussion[0].deletedAt).not.toBeNull();
+      expect(discussion[0].replies).toHaveLength(1);
+    });
+
+    it("rejects unrelated users", () => {
+      const lesson = createLesson(base.course.id);
+      const outsider = testDb
+        .insert(schema.users)
+        .values({
+          name: "Outsider",
+          email: "outsider-3@example.com",
+          role: schema.UserRole.Student,
+        })
+        .returning()
+        .get();
+
+      const comment = createLessonComment(
+        base.instructor.id,
+        lesson.id,
+        "Protected note"
+      );
+
+      expect(() => softDeleteLessonComment(outsider.id, comment.id)).toThrow(
+        "You do not have access to delete this comment"
+      );
     });
   });
 });
