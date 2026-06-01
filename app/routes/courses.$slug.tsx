@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import { Link, useSearchParams } from "react-router";
+import { useEffect, useState } from "react";
+import { Link, useSearchParams, Form } from "react-router";
 import { toast } from "sonner";
 import type { Route } from "./+types/courses.$slug";
 import {
@@ -13,11 +13,18 @@ import {
   getLessonProgressForCourse,
   getNextIncompleteLesson,
 } from "~/services/progressService";
+import {
+  getCourseReviewStats,
+  getUserReviewForCourse,
+  submitReview,
+} from "~/services/reviewService";
 import { getCurrentUserId } from "~/lib/session";
 import { LessonProgressStatus } from "~/db/schema";
 import { Card, CardContent, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
+import { StarRating } from "~/components/star-rating";
+import { StarRatingInput } from "~/components/star-rating-input";
 import {
   Tabs,
   TabsList,
@@ -102,6 +109,15 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     : courseWithDetails.price;
   const tierInfo = getCountryTierInfo(country);
 
+  // Get review stats
+  const reviewStats = getCourseReviewStats(course.id);
+
+  // Get user's review if logged in
+  let userReview = null;
+  if (currentUserId) {
+    userReview = getUserReviewForCourse(currentUserId, course.id);
+  }
+
   return {
     course: courseWithDetails,
     salesCopyHtml,
@@ -113,10 +129,39 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     currentUserId,
     pppPrice,
     tierInfo,
+    reviewStats,
+    userReview,
   };
 }
 
-// No action — enrollment is handled via the purchase confirmation page
+export async function action({ request, params }: Route.ActionArgs) {
+  const currentUserId = await getCurrentUserId(request);
+  if (!currentUserId) {
+    throw data("You must be logged in to submit a review", { status: 401 });
+  }
+
+  const slug = params.slug;
+  const course = getCourseBySlug(slug);
+  if (!course) {
+    throw data("Course not found", { status: 404 });
+  }
+
+  const formData = await request.formData();
+  const rating = formData.get("rating");
+
+  if (!rating || isNaN(Number(rating))) {
+    throw data("Invalid rating", { status: 400 });
+  }
+
+  const ratingValue = Number(rating);
+  if (ratingValue < 1 || ratingValue > 5) {
+    throw data("Rating must be between 1 and 5", { status: 400 });
+  }
+
+  submitReview(currentUserId, course.id, ratingValue);
+
+  return { success: true };
+}
 
 export function HydrateFallback() {
   return (
@@ -181,9 +226,12 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
     currentUserId,
     pppPrice,
     tierInfo,
+    reviewStats,
+    userReview,
   } = loaderData;
   const isInstructor = currentUserId === course.instructorId;
   const [searchParams, setSearchParams] = useSearchParams();
+  const [selectedRating, setSelectedRating] = useState(userReview?.rating ?? 0);
 
   useEffect(() => {
     if (searchParams.get("already_enrolled") === "1") {
@@ -301,6 +349,13 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
         <p className="mb-4 text-lg text-muted-foreground">
           {course.description}
         </p>
+        <div className="mb-4">
+          <StarRating
+            rating={reviewStats.averageRating}
+            totalReviews={reviewStats.totalReviews}
+            size="md"
+          />
+        </div>
         <div className="flex items-center gap-4 text-sm text-muted-foreground">
           <span className="flex items-center gap-1.5">
             <UserAvatar
@@ -413,6 +468,32 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
                       Buy More Seats
                     </Button>
                   </Link>
+
+                  {/* Review form for enrolled students */}
+                  <div className="border-t pt-4">
+                    <h3 className="mb-3 text-sm font-semibold">
+                      {userReview ? "Update Your Rating" : "Rate This Course"}
+                    </h3>
+                    <Form method="post">
+                      <div className="mb-3 flex justify-center">
+                        <StarRatingInput
+                          value={selectedRating}
+                          onChange={setSelectedRating}
+                          name="rating"
+                          size="md"
+                        />
+                      </div>
+                      <Button
+                        type="submit"
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        disabled={selectedRating === 0}
+                      >
+                        {userReview ? "Update Rating" : "Submit Rating"}
+                      </Button>
+                    </Form>
+                  </div>
                 </>
               ) : (
                 enrollButton
