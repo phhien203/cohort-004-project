@@ -21,6 +21,10 @@ import {
   calculateWatchProgress,
 } from "~/services/videoTrackingService";
 import {
+  getLessonDiscussion,
+  type LessonDiscussionThread,
+} from "~/services/commentService";
+import {
   getQuizByLessonId,
   getQuizWithQuestions,
   getBestAttempt,
@@ -172,6 +176,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     }
   }
 
+  const canViewDiscussion =
+    !!currentUserId && (enrolled || currentUserId === course.instructorId);
+
   // PPP Access Guard
   let pppBlocked = false;
   let pppBlockedCountry: string | null = null;
@@ -253,6 +260,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       id: courseWithDetails.id,
       title: courseWithDetails.title,
       slug: courseWithDetails.slug,
+      instructorId: courseWithDetails.instructorId,
     },
     curriculum: courseWithDetails.modules.map((m) => ({
       id: m.id,
@@ -281,6 +289,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     pppBlocked,
     pppBlockedCountry,
     pppPurchaseCountry,
+    discussion: canViewDiscussion ? getLessonDiscussion(lessonId) : null,
   };
 }
 
@@ -382,6 +391,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
     pppBlocked,
     pppBlockedCountry,
     pppPurchaseCountry,
+    discussion,
   } = loaderData;
   const [autoplay, toggleAutoplay] = useAutoplay();
   const fetcher = useFetcher({ key: `mark-complete-${lesson.id}` });
@@ -535,6 +545,8 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
             </Card>
           )}
 
+          {discussion && <LessonDiscussionSection threads={discussion} />}
+
           {/* Quiz Section */}
           {quiz && enrolled && currentUserId && (
             <QuizSection
@@ -642,6 +654,61 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
         </div>
       </div>
     </div>
+  );
+}
+
+function LessonDiscussionSection({
+  threads,
+}: {
+  threads: LessonDiscussionThread[];
+}) {
+  return (
+    <section className="mb-8 border-t pt-8">
+      <div className="mb-4">
+        <h2 className="text-2xl font-semibold">Discussion</h2>
+        <p className="text-sm text-muted-foreground">
+          Learn alongside the rest of the cohort right where questions come up.
+        </p>
+      </div>
+
+      {threads.length === 0 ? (
+        <Card>
+          <CardContent className="py-10 text-center">
+            <p className="font-medium">No comments yet.</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Start the discussion once commenting is enabled.
+            </p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-4">
+          {threads.map((thread) => (
+            <Card key={thread.id}>
+              <CardContent className="space-y-4 p-4">
+                <p className="whitespace-pre-wrap text-sm leading-6">
+                  {thread.body}
+                </p>
+
+                {thread.replies.length > 0 && (
+                  <div className="space-y-3 border-l pl-4">
+                    {thread.replies.map((reply) => (
+                      <div
+                        key={reply.id}
+                        className="rounded-md bg-muted/40 p-3 text-sm"
+                      >
+                        <p className="whitespace-pre-wrap leading-6">
+                          {reply.body}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
