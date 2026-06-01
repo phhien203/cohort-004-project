@@ -181,6 +181,71 @@ describe("commentService", () => {
       expect(comment.body).toBe("Instructor clarification");
     });
 
+    it("creates a reply under a top-level comment", () => {
+      const lesson = createLesson(base.course.id);
+
+      testDb
+        .insert(schema.enrollments)
+        .values({
+          userId: base.user.id,
+          courseId: base.course.id,
+        })
+        .run();
+
+      const parent = createLessonComment(
+        base.instructor.id,
+        lesson.id,
+        "Top-level question"
+      );
+
+      const reply = createLessonComment(
+        base.user.id,
+        lesson.id,
+        "Threaded answer",
+        parent.id
+      );
+
+      expect(reply.parentId).toBe(parent.id);
+
+      const discussion = getLessonDiscussion(lesson.id);
+      expect(discussion[0].replies.map((item) => item.body)).toEqual([
+        "Threaded answer",
+      ]);
+    });
+
+    it("rejects replies to replies", () => {
+      const lesson = createLesson(base.course.id);
+
+      testDb
+        .insert(schema.enrollments)
+        .values({
+          userId: base.user.id,
+          courseId: base.course.id,
+        })
+        .run();
+
+      const parent = createLessonComment(
+        base.instructor.id,
+        lesson.id,
+        "Top-level question"
+      );
+      const reply = createLessonComment(
+        base.user.id,
+        lesson.id,
+        "First reply",
+        parent.id
+      );
+
+      expect(() =>
+        createLessonComment(
+          base.instructor.id,
+          lesson.id,
+          "Nested too deep",
+          reply.id
+        )
+      ).toThrow("Replies can only be added to top-level comments");
+    });
+
     it("rejects users who are neither enrolled nor the instructor", () => {
       const lesson = createLesson(base.course.id);
       const outsider = testDb

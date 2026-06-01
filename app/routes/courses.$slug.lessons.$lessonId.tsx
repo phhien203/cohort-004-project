@@ -74,6 +74,7 @@ const markCompleteSchema = z.object({
 const createCommentSchema = z.object({
   intent: z.literal("create-comment"),
   body: z.string().trim().min(1, "Comment cannot be empty").max(5000),
+  parentId: z.coerce.number().int().positive().optional(),
 });
 
 export function meta({ data: loaderData }: Route.MetaArgs) {
@@ -330,7 +331,12 @@ export async function action({ params, request }: Route.ActionArgs) {
     }
 
     try {
-      createLessonComment(currentUserId, lessonId, parsed.data.body);
+      createLessonComment(
+        currentUserId,
+        lessonId,
+        parsed.data.body,
+        parsed.data.parentId ?? null
+      );
       return { success: true };
     } catch (error) {
       const message =
@@ -702,15 +708,29 @@ function LessonDiscussionSection({
   const createCommentFetcher = useFetcher<{
     success?: boolean;
     errors?: Record<string, string>;
-  }>({ key: "create-comment" });
+  }>({ key: "create-comment-top-level" });
+  const replyFetcher = useFetcher<{
+    success?: boolean;
+    errors?: Record<string, string>;
+  }>({ key: "create-comment-reply" });
   const [draft, setDraft] = useState("");
+  const [replyingTo, setReplyingTo] = useState<number | null>(null);
+  const [replyDraft, setReplyDraft] = useState("");
   const isCreatingComment = createCommentFetcher.state !== "idle";
+  const isCreatingReply = replyFetcher.state !== "idle";
 
   useEffect(() => {
     if (createCommentFetcher.state === "idle" && createCommentFetcher.data?.success) {
       setDraft("");
     }
   }, [createCommentFetcher.state, createCommentFetcher.data]);
+
+  useEffect(() => {
+    if (replyFetcher.state === "idle" && replyFetcher.data?.success) {
+      setReplyDraft("");
+      setReplyingTo(null);
+    }
+  }, [replyFetcher.state, replyFetcher.data]);
 
   return (
     <section className="mb-8 border-t pt-8">
@@ -764,6 +784,57 @@ function LessonDiscussionSection({
                 <p className="whitespace-pre-wrap text-sm leading-6">
                   {thread.body}
                 </p>
+
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setReplyingTo((current) =>
+                        current === thread.id ? null : thread.id
+                      );
+                      setReplyDraft("");
+                    }}
+                  >
+                    Reply
+                  </Button>
+                </div>
+
+                {replyingTo === thread.id && (
+                  <replyFetcher.Form method="post" className="space-y-3">
+                    <input type="hidden" name="intent" value="create-comment" />
+                    <input type="hidden" name="parentId" value={thread.id} />
+                    <Textarea
+                      name="body"
+                      rows={3}
+                      value={replyDraft}
+                      onChange={(event) => setReplyDraft(event.target.value)}
+                      placeholder="Write a reply..."
+                      aria-invalid={!!replyFetcher.data?.errors?.body}
+                    />
+                    {replyFetcher.data?.errors?.body && (
+                      <p className="text-sm text-destructive">
+                        {replyFetcher.data.errors.body}
+                      </p>
+                    )}
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          setReplyingTo(null);
+                          setReplyDraft("");
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button type="submit" disabled={isCreatingReply}>
+                        {isCreatingReply ? "Replying..." : "Post Reply"}
+                      </Button>
+                    </div>
+                  </replyFetcher.Form>
+                )}
 
                 {thread.replies.length > 0 && (
                   <div className="space-y-3 border-l pl-4">

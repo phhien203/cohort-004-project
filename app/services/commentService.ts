@@ -28,7 +28,12 @@ export type LessonDiscussionThread = LessonDiscussionComment & {
   replies: LessonDiscussionComment[];
 };
 
-export function createLessonComment(userId: number, lessonId: number, body: string) {
+export function createLessonComment(
+  userId: number,
+  lessonId: number,
+  body: string,
+  parentId: number | null = null
+) {
   const lessonAccess = db
     .select({
       courseId: modules.courseId,
@@ -61,11 +66,32 @@ export function createLessonComment(userId: number, lessonId: number, body: stri
     throw new Error("You do not have access to comment on this lesson");
   }
 
+  if (parentId !== null) {
+    const parentComment = db
+      .select({
+        id: lessonComments.id,
+        lessonId: lessonComments.lessonId,
+        parentId: lessonComments.parentId,
+      })
+      .from(lessonComments)
+      .where(eq(lessonComments.id, parentId))
+      .get();
+
+    if (!parentComment || parentComment.lessonId !== lessonId) {
+      throw new Error("Parent comment not found");
+    }
+
+    if (parentComment.parentId !== null) {
+      throw new Error("Replies can only be added to top-level comments");
+    }
+  }
+
   return db
     .insert(lessonComments)
     .values({
       lessonId,
       userId,
+      parentId,
       body,
     })
     .returning()
