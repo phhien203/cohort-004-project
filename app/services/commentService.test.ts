@@ -11,7 +11,7 @@ vi.mock("~/db", () => ({
   },
 }));
 
-import { getLessonDiscussion } from "./commentService";
+import { createLessonComment, getLessonDiscussion } from "./commentService";
 
 function createLesson(courseId: number) {
   const mod = testDb
@@ -139,6 +139,63 @@ describe("commentService", () => {
       expect(discussion).toHaveLength(1);
       expect(discussion[0].body).toBe("Deleted comment");
       expect(discussion[0].deletedAt).toBe("2026-01-02T00:00:00.000Z");
+    });
+  });
+
+  describe("createLessonComment", () => {
+    it("creates a new top-level lesson comment for an enrolled student", () => {
+      const lesson = createLesson(base.course.id);
+
+      testDb
+        .insert(schema.enrollments)
+        .values({
+          userId: base.user.id,
+          courseId: base.course.id,
+        })
+        .run();
+
+      const comment = createLessonComment(
+        base.user.id,
+        lesson.id,
+        "First post\nwith two lines"
+      );
+
+      expect(comment.lessonId).toBe(lesson.id);
+      expect(comment.userId).toBe(base.user.id);
+      expect(comment.parentId).toBeNull();
+      expect(comment.body).toBe("First post\nwith two lines");
+      expect(comment.createdAt).toBeDefined();
+      expect(comment.updatedAt).toBeDefined();
+    });
+
+    it("allows the course instructor to create a top-level lesson comment", () => {
+      const lesson = createLesson(base.course.id);
+
+      const comment = createLessonComment(
+        base.instructor.id,
+        lesson.id,
+        "Instructor clarification"
+      );
+
+      expect(comment.userId).toBe(base.instructor.id);
+      expect(comment.body).toBe("Instructor clarification");
+    });
+
+    it("rejects users who are neither enrolled nor the instructor", () => {
+      const lesson = createLesson(base.course.id);
+      const outsider = testDb
+        .insert(schema.users)
+        .values({
+          name: "Outsider",
+          email: "outsider@example.com",
+          role: schema.UserRole.Student,
+        })
+        .returning()
+        .get();
+
+      expect(() =>
+        createLessonComment(outsider.id, lesson.id, "Should not work")
+      ).toThrow("You do not have access to comment on this lesson");
     });
   });
 });

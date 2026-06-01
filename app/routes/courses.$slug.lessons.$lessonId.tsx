@@ -21,6 +21,7 @@ import {
   calculateWatchProgress,
 } from "~/services/videoTrackingService";
 import {
+  createLessonComment,
   getLessonDiscussion,
   type LessonDiscussionThread,
 } from "~/services/commentService";
@@ -33,6 +34,7 @@ import { computeResult } from "~/services/quizScoringService";
 import { LessonProgressStatus } from "~/db/schema";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent } from "~/components/ui/card";
+import { Textarea } from "~/components/ui/textarea";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -67,6 +69,11 @@ const lessonParamsSchema = z.object({
 
 const markCompleteSchema = z.object({
   intent: z.literal("mark-complete"),
+});
+
+const createCommentSchema = z.object({
+  intent: z.literal("create-comment"),
+  body: z.string().trim().min(1, "Comment cannot be empty").max(5000),
 });
 
 export function meta({ data: loaderData }: Route.MetaArgs) {
@@ -308,6 +315,36 @@ export async function action({ params, request }: Route.ActionArgs) {
 
   const formData = await request.formData();
   const intent = formData.get("intent");
+
+  if (intent === "create-comment") {
+    const parsed = parseFormData(formData, createCommentSchema);
+
+    if (!parsed.success) {
+      return data(
+        {
+          errors: parsed.errors,
+          success: false,
+        },
+        { status: 400 }
+      );
+    }
+
+    try {
+      createLessonComment(currentUserId, lessonId, parsed.data.body);
+      return { success: true };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to create comment";
+
+      return data(
+        {
+          errors: { body: message },
+          success: false,
+        },
+        { status: 403 }
+      );
+    }
+  }
 
   if (intent === "mark-complete") {
     markLessonComplete(currentUserId, lessonId);
@@ -662,6 +699,19 @@ function LessonDiscussionSection({
 }: {
   threads: LessonDiscussionThread[];
 }) {
+  const createCommentFetcher = useFetcher<{
+    success?: boolean;
+    errors?: Record<string, string>;
+  }>({ key: "create-comment" });
+  const [draft, setDraft] = useState("");
+  const isCreatingComment = createCommentFetcher.state !== "idle";
+
+  useEffect(() => {
+    if (createCommentFetcher.state === "idle" && createCommentFetcher.data?.success) {
+      setDraft("");
+    }
+  }, [createCommentFetcher.state, createCommentFetcher.data]);
+
   return (
     <section className="mb-8 border-t pt-8">
       <div className="mb-4">
@@ -671,12 +721,38 @@ function LessonDiscussionSection({
         </p>
       </div>
 
+      <Card className="mb-4">
+        <CardContent className="p-4">
+          <createCommentFetcher.Form method="post" className="space-y-3">
+            <input type="hidden" name="intent" value="create-comment" />
+            <Textarea
+              name="body"
+              rows={4}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              placeholder="Ask a question or share what you learned..."
+              aria-invalid={!!createCommentFetcher.data?.errors?.body}
+            />
+            {createCommentFetcher.data?.errors?.body && (
+              <p className="text-sm text-destructive">
+                {createCommentFetcher.data.errors.body}
+              </p>
+            )}
+            <div className="flex justify-end">
+              <Button type="submit" disabled={isCreatingComment}>
+                {isCreatingComment ? "Posting..." : "Post Comment"}
+              </Button>
+            </div>
+          </createCommentFetcher.Form>
+        </CardContent>
+      </Card>
+
       {threads.length === 0 ? (
         <Card>
           <CardContent className="py-10 text-center">
             <p className="font-medium">No comments yet.</p>
             <p className="mt-1 text-sm text-muted-foreground">
-              Start the discussion once commenting is enabled.
+              Start the discussion!
             </p>
           </CardContent>
         </Card>

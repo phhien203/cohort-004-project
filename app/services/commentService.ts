@@ -1,6 +1,14 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "~/db";
-import { lessonComments, users, type UserRole } from "~/db/schema";
+import {
+  courses,
+  enrollments,
+  lessonComments,
+  lessons,
+  modules,
+  users,
+  type UserRole,
+} from "~/db/schema";
 
 export type LessonDiscussionComment = {
   id: number;
@@ -19,6 +27,50 @@ export type LessonDiscussionComment = {
 export type LessonDiscussionThread = LessonDiscussionComment & {
   replies: LessonDiscussionComment[];
 };
+
+export function createLessonComment(userId: number, lessonId: number, body: string) {
+  const lessonAccess = db
+    .select({
+      courseId: modules.courseId,
+      instructorId: courses.instructorId,
+    })
+    .from(lessons)
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .innerJoin(courses, eq(modules.courseId, courses.id))
+    .where(eq(lessons.id, lessonId))
+    .get();
+
+  if (!lessonAccess) {
+    throw new Error("Lesson not found");
+  }
+
+  const canComment =
+    lessonAccess.instructorId === userId ||
+    !!db
+      .select({ id: enrollments.id })
+      .from(enrollments)
+      .where(
+        and(
+          eq(enrollments.userId, userId),
+          eq(enrollments.courseId, lessonAccess.courseId)
+        )
+      )
+      .get();
+
+  if (!canComment) {
+    throw new Error("You do not have access to comment on this lesson");
+  }
+
+  return db
+    .insert(lessonComments)
+    .values({
+      lessonId,
+      userId,
+      body,
+    })
+    .returning()
+    .get();
+}
 
 export function getLessonDiscussion(
   lessonId: number
