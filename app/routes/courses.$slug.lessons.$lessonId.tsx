@@ -37,6 +37,7 @@ import { LessonProgressStatus } from "~/db/schema";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent } from "~/components/ui/card";
 import { Textarea } from "~/components/ui/textarea";
+import { UserAvatar } from "~/components/user-avatar";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -884,6 +885,12 @@ function LessonDiscussionSection({
                   </editFetcher.Form>
                 ) : (
                   <>
+                    <CommentHeader
+                      name={thread.authorName}
+                      avatarUrl={thread.authorAvatarUrl}
+                      createdAt={thread.createdAt}
+                      isInstructor={thread.userId === courseInstructorId}
+                    />
                     <p className="whitespace-pre-wrap text-sm leading-6">
                       {thread.body}
                     </p>
@@ -1002,6 +1009,12 @@ function LessonDiscussionSection({
                           </editFetcher.Form>
                         ) : (
                           <>
+                            <CommentHeader
+                              name={reply.authorName}
+                              avatarUrl={reply.authorAvatarUrl}
+                              createdAt={reply.createdAt}
+                              isInstructor={reply.userId === courseInstructorId}
+                            />
                             <p className="whitespace-pre-wrap leading-6">
                               {reply.body}
                             </p>
@@ -1039,6 +1052,46 @@ function LessonDiscussionSection({
         </div>
       )}
     </section>
+  );
+}
+
+function formatCommentTimestamp(timestamp: string) {
+  return new Date(timestamp).toLocaleString("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
+function CommentHeader({
+  name,
+  avatarUrl,
+  createdAt,
+  isInstructor,
+}: {
+  name: string;
+  avatarUrl: string | null;
+  createdAt: string;
+  isInstructor: boolean;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <div className="flex items-center gap-3">
+        <UserAvatar name={name} avatarUrl={avatarUrl} className="size-9" />
+        <div>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-medium">{name}</p>
+            {isInstructor && (
+              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                Instructor
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {formatCommentTimestamp(createdAt)}
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }
 
