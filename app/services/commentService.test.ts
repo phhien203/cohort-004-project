@@ -11,7 +11,11 @@ vi.mock("~/db", () => ({
   },
 }));
 
-import { createLessonComment, getLessonDiscussion } from "./commentService";
+import {
+  createLessonComment,
+  getLessonDiscussion,
+  updateLessonComment,
+} from "./commentService";
 
 function createLesson(courseId: number) {
   const mod = testDb
@@ -261,6 +265,68 @@ describe("commentService", () => {
       expect(() =>
         createLessonComment(outsider.id, lesson.id, "Should not work")
       ).toThrow("You do not have access to comment on this lesson");
+    });
+  });
+
+  describe("updateLessonComment", () => {
+    it("allows an author to edit their own comment and bumps updatedAt", () => {
+      const lesson = createLesson(base.course.id);
+
+      testDb
+        .insert(schema.enrollments)
+        .values({
+          userId: base.user.id,
+          courseId: base.course.id,
+        })
+        .run();
+
+      const comment = testDb
+        .insert(schema.lessonComments)
+        .values({
+          lessonId: lesson.id,
+          userId: base.user.id,
+          body: "Original body",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        })
+        .returning()
+        .get();
+
+      const updated = updateLessonComment(
+        base.user.id,
+        comment.id,
+        "Clarified body"
+      );
+
+      expect(updated.body).toBe("Clarified body");
+      expect(updated.updatedAt).not.toBe("2026-01-01T00:00:00.000Z");
+    });
+
+    it("rejects unrelated users", () => {
+      const lesson = createLesson(base.course.id);
+      const outsider = testDb
+        .insert(schema.users)
+        .values({
+          name: "Outsider",
+          email: "outsider-2@example.com",
+          role: schema.UserRole.Student,
+        })
+        .returning()
+        .get();
+
+      const comment = testDb
+        .insert(schema.lessonComments)
+        .values({
+          lessonId: lesson.id,
+          userId: base.user.id,
+          body: "Original body",
+        })
+        .returning()
+        .get();
+
+      expect(() =>
+        updateLessonComment(outsider.id, comment.id, "Should fail")
+      ).toThrow("You do not have access to edit this comment");
     });
   });
 });

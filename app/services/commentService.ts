@@ -9,6 +9,7 @@ import {
   users,
   type UserRole,
 } from "~/db/schema";
+import { canModifyComment } from "./canModifyComment";
 
 export type LessonDiscussionComment = {
   id: number;
@@ -145,4 +146,56 @@ export function getLessonDiscussion(
     ...comment,
     replies: repliesByParent.get(comment.id) ?? [],
   }));
+}
+
+export function updateLessonComment(
+  currentUserId: number,
+  commentId: number,
+  body: string
+) {
+  const existingComment = db
+    .select({
+      id: lessonComments.id,
+      userId: lessonComments.userId,
+      body: lessonComments.body,
+      createdAt: lessonComments.createdAt,
+      updatedAt: lessonComments.updatedAt,
+      deletedAt: lessonComments.deletedAt,
+      courseInstructorId: courses.instructorId,
+    })
+    .from(lessonComments)
+    .innerJoin(lessons, eq(lessonComments.lessonId, lessons.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .innerJoin(courses, eq(modules.courseId, courses.id))
+    .where(eq(lessonComments.id, commentId))
+    .get();
+
+  if (!existingComment) {
+    throw new Error("Comment not found");
+  }
+
+  if (
+    !canModifyComment(
+      existingComment.userId,
+      currentUserId,
+      existingComment.courseInstructorId,
+      existingComment.deletedAt
+    )
+  ) {
+    throw new Error("You do not have access to edit this comment");
+  }
+
+  if (existingComment.body === body) {
+    return existingComment;
+  }
+
+  return db
+    .update(lessonComments)
+    .set({
+      body,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(lessonComments.id, commentId))
+    .returning()
+    .get();
 }

@@ -24,7 +24,9 @@ import {
   createLessonComment,
   getLessonDiscussion,
   type LessonDiscussionThread,
+  updateLessonComment,
 } from "~/services/commentService";
+import { canModifyComment } from "~/services/canModifyComment";
 import {
   getQuizByLessonId,
   getQuizWithQuestions,
@@ -75,6 +77,12 @@ const createCommentSchema = z.object({
   intent: z.literal("create-comment"),
   body: z.string().trim().min(1, "Comment cannot be empty").max(5000),
   parentId: z.coerce.number().int().positive().optional(),
+});
+
+const editCommentSchema = z.object({
+  intent: z.literal("edit-comment"),
+  commentId: z.coerce.number().int().positive(),
+  body: z.string().trim().min(1, "Comment cannot be empty").max(5000),
 });
 
 export function meta({ data: loaderData }: Route.MetaArgs) {
@@ -352,6 +360,36 @@ export async function action({ params, request }: Route.ActionArgs) {
     }
   }
 
+  if (intent === "edit-comment") {
+    const parsed = parseFormData(formData, editCommentSchema);
+
+    if (!parsed.success) {
+      return data(
+        {
+          errors: parsed.errors,
+          success: false,
+        },
+        { status: 400 }
+      );
+    }
+
+    try {
+      updateLessonComment(currentUserId, parsed.data.commentId, parsed.data.body);
+      return { success: true };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to edit comment";
+
+      return data(
+        {
+          errors: { body: message },
+          success: false,
+        },
+        { status: 403 }
+      );
+    }
+  }
+
   if (intent === "mark-complete") {
     markLessonComplete(currentUserId, lessonId);
     return { success: true };
@@ -588,7 +626,13 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
             </Card>
           )}
 
-          {discussion && <LessonDiscussionSection threads={discussion} />}
+          {currentUserId && discussion && (
+            <LessonDiscussionSection
+              threads={discussion}
+              currentUserId={currentUserId}
+              courseInstructorId={course.instructorId}
+            />
+          )}
 
           {/* Quiz Section */}
           {quiz && enrolled && currentUserId && (
@@ -702,8 +746,12 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
 
 function LessonDiscussionSection({
   threads,
+  currentUserId,
+  courseInstructorId,
 }: {
   threads: LessonDiscussionThread[];
+  currentUserId: number;
+  courseInstructorId: number;
 }) {
   const createCommentFetcher = useFetcher<{
     success?: boolean;
@@ -713,11 +761,18 @@ function LessonDiscussionSection({
     success?: boolean;
     errors?: Record<string, string>;
   }>({ key: "create-comment-reply" });
+  const editFetcher = useFetcher<{
+    success?: boolean;
+    errors?: Record<string, string>;
+  }>({ key: "edit-comment" });
   const [draft, setDraft] = useState("");
   const [replyingTo, setReplyingTo] = useState<number | null>(null);
   const [replyDraft, setReplyDraft] = useState("");
+  const [editingCommentId, setEditingCommentId] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState("");
   const isCreatingComment = createCommentFetcher.state !== "idle";
   const isCreatingReply = replyFetcher.state !== "idle";
+  const isEditingComment = editFetcher.state !== "idle";
 
   useEffect(() => {
     if (createCommentFetcher.state === "idle" && createCommentFetcher.data?.success) {
@@ -731,6 +786,20 @@ function LessonDiscussionSection({
       setReplyingTo(null);
     }
   }, [replyFetcher.state, replyFetcher.data]);
+
+  useEffect(() => {
+    if (editFetcher.state === "idle" && editFetcher.data?.success) {
+      setEditDraft("");
+      setEditingCommentId(null);
+    }
+  }, [editFetcher.state, editFetcher.data]);
+
+  function beginEditing(commentId: number, body: string) {
+    setReplyingTo(null);
+    setReplyDraft("");
+    setEditingCommentId(commentId);
+    setEditDraft(body);
+  }
 
   return (
     <section className="mb-8 border-t pt-8">
@@ -781,16 +850,72 @@ function LessonDiscussionSection({
           {threads.map((thread) => (
             <Card key={thread.id}>
               <CardContent className="space-y-4 p-4">
-                <p className="whitespace-pre-wrap text-sm leading-6">
-                  {thread.body}
-                </p>
+                {editingCommentId === thread.id ? (
+                  <editFetcher.Form method="post" className="space-y-3">
+                    <input type="hidden" name="intent" value="edit-comment" />
+                    <input type="hidden" name="commentId" value={thread.id} />
+                    <Textarea
+                      name="body"
+                      rows={4}
+                      value={editDraft}
+                      onChange={(event) => setEditDraft(event.target.value)}
+                      aria-invalid={!!editFetcher.data?.errors?.body}
+                    />
+                    {editFetcher.data?.errors?.body && (
+                      <p className="text-sm text-destructive">
+                        {editFetcher.data.errors.body}
+                      </p>
+                    )}
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          setEditingCommentId(null);
+                          setEditDraft("");
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button type="submit" disabled={isEditingComment}>
+                        {isEditingComment ? "Saving..." : "Save Changes"}
+                      </Button>
+                    </div>
+                  </editFetcher.Form>
+                ) : (
+                  <>
+                    <p className="whitespace-pre-wrap text-sm leading-6">
+                      {thread.body}
+                    </p>
+                    {thread.updatedAt !== thread.createdAt && (
+                      <p className="text-xs text-muted-foreground">Edited</p>
+                    )}
+                  </>
+                )}
 
-                <div className="flex justify-end">
+                <div className="flex justify-end gap-2">
+                  {canModifyComment(
+                    thread.userId,
+                    currentUserId,
+                    courseInstructorId,
+                    thread.deletedAt
+                  ) && editingCommentId !== thread.id && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => beginEditing(thread.id, thread.body)}
+                    >
+                      Edit
+                    </Button>
+                  )}
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
                     onClick={() => {
+                      setEditingCommentId(null);
+                      setEditDraft("");
                       setReplyingTo((current) =>
                         current === thread.id ? null : thread.id
                       );
@@ -843,9 +968,67 @@ function LessonDiscussionSection({
                         key={reply.id}
                         className="rounded-md bg-muted/40 p-3 text-sm"
                       >
-                        <p className="whitespace-pre-wrap leading-6">
-                          {reply.body}
-                        </p>
+                        {editingCommentId === reply.id ? (
+                          <editFetcher.Form method="post" className="space-y-3">
+                            <input type="hidden" name="intent" value="edit-comment" />
+                            <input type="hidden" name="commentId" value={reply.id} />
+                            <Textarea
+                              name="body"
+                              rows={3}
+                              value={editDraft}
+                              onChange={(event) => setEditDraft(event.target.value)}
+                              aria-invalid={!!editFetcher.data?.errors?.body}
+                            />
+                            {editFetcher.data?.errors?.body && (
+                              <p className="text-sm text-destructive">
+                                {editFetcher.data.errors.body}
+                              </p>
+                            )}
+                            <div className="flex justify-end gap-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => {
+                                  setEditingCommentId(null);
+                                  setEditDraft("");
+                                }}
+                              >
+                                Cancel
+                              </Button>
+                              <Button type="submit" disabled={isEditingComment}>
+                                {isEditingComment ? "Saving..." : "Save Changes"}
+                              </Button>
+                            </div>
+                          </editFetcher.Form>
+                        ) : (
+                          <>
+                            <p className="whitespace-pre-wrap leading-6">
+                              {reply.body}
+                            </p>
+                            {reply.updatedAt !== reply.createdAt && (
+                              <p className="mt-2 text-xs text-muted-foreground">
+                                Edited
+                              </p>
+                            )}
+                            {canModifyComment(
+                              reply.userId,
+                              currentUserId,
+                              courseInstructorId,
+                              reply.deletedAt
+                            ) && (
+                              <div className="mt-2 flex justify-end">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => beginEditing(reply.id, reply.body)}
+                                >
+                                  Edit
+                                </Button>
+                              </div>
+                            )}
+                          </>
+                        )}
                       </div>
                     ))}
                   </div>
