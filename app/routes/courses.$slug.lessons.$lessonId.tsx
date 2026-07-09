@@ -29,6 +29,11 @@ import {
 } from "~/services/commentService";
 import { canModifyComment } from "~/services/canModifyComment";
 import {
+  getBookmarkedLessonIds,
+  isLessonBookmarked,
+  toggleBookmark,
+} from "~/services/bookmarkService";
+import {
   getQuizByLessonId,
   getQuizWithQuestions,
   getBestAttempt,
@@ -41,6 +46,7 @@ import { Textarea } from "~/components/ui/textarea";
 import { UserAvatar } from "~/components/user-avatar";
 import {
   AlertTriangle,
+  Bookmark,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -165,6 +171,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   let lastWatchPosition = 0;
   let watchProgress = 0;
   let lessonProgressMap: Record<number, string> = {};
+  let bookmarkedLessonIds: number[] = [];
+  let isBookmarked = false;
 
   if (currentUserId) {
     enrolled = isUserEnrolled(currentUserId, course.id);
@@ -196,6 +204,12 @@ export async function loader({ params, request }: Route.LoaderArgs) {
           );
         }
       }
+
+      bookmarkedLessonIds = getBookmarkedLessonIds({
+        userId: currentUserId,
+        courseId: course.id,
+      });
+      isBookmarked = isLessonBookmarked({ userId: currentUserId, lessonId });
     }
   }
 
@@ -309,6 +323,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     lastWatchPosition,
     watchProgress,
     lessonProgressMap,
+    bookmarkedLessonIds,
+    isBookmarked,
     pppBlocked,
     pppBlockedCountry,
     pppPurchaseCountry,
@@ -381,7 +397,11 @@ export async function action({ params, request }: Route.ActionArgs) {
     }
 
     try {
-      updateLessonComment(currentUserId, parsed.data.commentId, parsed.data.body);
+      updateLessonComment(
+        currentUserId,
+        parsed.data.commentId,
+        parsed.data.body
+      );
       return { success: true };
     } catch (error) {
       const message =
@@ -430,6 +450,24 @@ export async function action({ params, request }: Route.ActionArgs) {
   if (intent === "mark-complete") {
     markLessonComplete(currentUserId, lessonId);
     return { success: true };
+  }
+
+  if (intent === "toggle-bookmark") {
+    const targetLesson = getLessonById(lessonId);
+    if (!targetLesson) {
+      throw data("Lesson not found", { status: 404 });
+    }
+
+    const targetModule = getModuleById(targetLesson.moduleId);
+    if (!targetModule || targetModule.courseId !== course.id) {
+      throw data("Lesson not found in this course", { status: 404 });
+    }
+
+    if (!isUserEnrolled(currentUserId, course.id)) {
+      throw data("You must be enrolled in this course", { status: 403 });
+    }
+    const result = toggleBookmark({ userId: currentUserId, lessonId });
+    return { success: true, bookmarked: result.bookmarked };
   }
 
   if (intent === "submit-quiz") {
@@ -506,6 +544,8 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
     lastWatchPosition,
     watchProgress,
     lessonProgressMap,
+    bookmarkedLessonIds,
+    isBookmarked,
     pppBlocked,
     pppBlockedCountry,
     pppPurchaseCountry,
@@ -514,6 +554,12 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
   const [autoplay, toggleAutoplay] = useAutoplay();
   const fetcher = useFetcher({ key: `mark-complete-${lesson.id}` });
   const quizFetcher = useFetcher({ key: `quiz-${lesson.id}` });
+  const bookmarkFetcher = useFetcher({ key: `bookmark-${lesson.id}` });
+
+  const isTogglingBookmark =
+    bookmarkFetcher.state !== "idle" &&
+    bookmarkFetcher.formData?.get("intent") === "toggle-bookmark";
+  const bookmarked = bookmarkFetcher.data?.bookmarked ?? isBookmarked;
   const navigate = useNavigate();
 
   const isMarking =
@@ -582,6 +628,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
         currentLessonId={lesson.id}
         lessonProgressMap={lessonProgressMap}
         enrolled={enrolled}
+        bookmarkedLessonIds={new Set(bookmarkedLessonIds)}
       />
 
       <div className="flex-1 p-6 lg:p-8">
@@ -629,6 +676,31 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
                   Open Code
                 </Button>
               </a>
+            )}
+            {enrolled && currentUserId && (
+              <bookmarkFetcher.Form method="post">
+                <input type="hidden" name="intent" value="toggle-bookmark" />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  type="submit"
+                  disabled={isTogglingBookmark}
+                >
+                  <Bookmark
+                    className={cn(
+                      "mr-1.5 size-4",
+                      bookmarked
+                        ? "fill-amber-500 text-amber-500"
+                        : "text-muted-foreground"
+                    )}
+                  />
+                  {isTogglingBookmark
+                    ? "Saving..."
+                    : bookmarked
+                      ? "Bookmarked"
+                      : "Bookmark"}
+                </Button>
+              </bookmarkFetcher.Form>
             )}
           </div>
 
@@ -817,7 +889,10 @@ function LessonDiscussionSection({
   const isDeletingComment = deleteFetcher.state !== "idle";
 
   useEffect(() => {
-    if (createCommentFetcher.state === "idle" && createCommentFetcher.data?.success) {
+    if (
+      createCommentFetcher.state === "idle" &&
+      createCommentFetcher.data?.success
+    ) {
       setDraft("");
     }
   }, [createCommentFetcher.state, createCommentFetcher.data]);
@@ -940,9 +1015,10 @@ function LessonDiscussionSection({
                     <p className="whitespace-pre-wrap text-sm leading-6 text-muted-foreground">
                       {thread.deletedAt ? "[comment deleted]" : thread.body}
                     </p>
-                    {thread.deletedAt === null && thread.updatedAt !== thread.createdAt && (
-                      <p className="text-xs text-muted-foreground">Edited</p>
-                    )}
+                    {thread.deletedAt === null &&
+                      thread.updatedAt !== thread.createdAt && (
+                        <p className="text-xs text-muted-foreground">Edited</p>
+                      )}
                   </>
                 )}
 
@@ -952,32 +1028,41 @@ function LessonDiscussionSection({
                     currentUserId,
                     courseInstructorId,
                     thread.deletedAt
-                  ) && thread.deletedAt === null && (
-                    <>
-                      {editingCommentId !== thread.id && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => beginEditing(thread.id, thread.body)}
-                        >
-                          Edit
-                        </Button>
-                      )}
-                      <deleteFetcher.Form method="post">
-                        <input type="hidden" name="intent" value="delete-comment" />
-                        <input type="hidden" name="commentId" value={thread.id} />
-                        <Button
-                          type="submit"
-                          variant="ghost"
-                          size="sm"
-                          disabled={isDeletingComment}
-                        >
-                          Delete
-                        </Button>
-                      </deleteFetcher.Form>
-                    </>
-                  )}
+                  ) &&
+                    thread.deletedAt === null && (
+                      <>
+                        {editingCommentId !== thread.id && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => beginEditing(thread.id, thread.body)}
+                          >
+                            Edit
+                          </Button>
+                        )}
+                        <deleteFetcher.Form method="post">
+                          <input
+                            type="hidden"
+                            name="intent"
+                            value="delete-comment"
+                          />
+                          <input
+                            type="hidden"
+                            name="commentId"
+                            value={thread.id}
+                          />
+                          <Button
+                            type="submit"
+                            variant="ghost"
+                            size="sm"
+                            disabled={isDeletingComment}
+                          >
+                            Delete
+                          </Button>
+                        </deleteFetcher.Form>
+                      </>
+                    )}
                   {thread.deletedAt === null && (
                     <Button
                       type="button"
@@ -1041,13 +1126,23 @@ function LessonDiscussionSection({
                       >
                         {editingCommentId === reply.id ? (
                           <editFetcher.Form method="post" className="space-y-3">
-                            <input type="hidden" name="intent" value="edit-comment" />
-                            <input type="hidden" name="commentId" value={reply.id} />
+                            <input
+                              type="hidden"
+                              name="intent"
+                              value="edit-comment"
+                            />
+                            <input
+                              type="hidden"
+                              name="commentId"
+                              value={reply.id}
+                            />
                             <Textarea
                               name="body"
                               rows={3}
                               value={editDraft}
-                              onChange={(event) => setEditDraft(event.target.value)}
+                              onChange={(event) =>
+                                setEditDraft(event.target.value)
+                              }
                               aria-invalid={!!editFetcher.data?.errors?.body}
                             />
                             {editFetcher.data?.errors?.body && (
@@ -1067,7 +1162,9 @@ function LessonDiscussionSection({
                                 Cancel
                               </Button>
                               <Button type="submit" disabled={isEditingComment}>
-                                {isEditingComment ? "Saving..." : "Save Changes"}
+                                {isEditingComment
+                                  ? "Saving..."
+                                  : "Save Changes"}
                               </Button>
                             </div>
                           </editFetcher.Form>
@@ -1080,42 +1177,56 @@ function LessonDiscussionSection({
                               isInstructor={reply.userId === courseInstructorId}
                             />
                             <p className="whitespace-pre-wrap leading-6 text-muted-foreground">
-                              {reply.deletedAt ? "[comment deleted]" : reply.body}
+                              {reply.deletedAt
+                                ? "[comment deleted]"
+                                : reply.body}
                             </p>
-                            {reply.deletedAt === null && reply.updatedAt !== reply.createdAt && (
-                              <p className="mt-2 text-xs text-muted-foreground">
-                                Edited
-                              </p>
-                            )}
+                            {reply.deletedAt === null &&
+                              reply.updatedAt !== reply.createdAt && (
+                                <p className="mt-2 text-xs text-muted-foreground">
+                                  Edited
+                                </p>
+                              )}
                             {canModifyComment(
                               reply.userId,
                               currentUserId,
                               courseInstructorId,
                               reply.deletedAt
-                            ) && reply.deletedAt === null && (
-                              <div className="mt-2 flex justify-end gap-2">
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => beginEditing(reply.id, reply.body)}
-                                >
-                                  Edit
-                                </Button>
-                                <deleteFetcher.Form method="post">
-                                  <input type="hidden" name="intent" value="delete-comment" />
-                                  <input type="hidden" name="commentId" value={reply.id} />
+                            ) &&
+                              reply.deletedAt === null && (
+                                <div className="mt-2 flex justify-end gap-2">
                                   <Button
-                                    type="submit"
+                                    type="button"
                                     variant="ghost"
                                     size="sm"
-                                    disabled={isDeletingComment}
+                                    onClick={() =>
+                                      beginEditing(reply.id, reply.body)
+                                    }
                                   >
-                                    Delete
+                                    Edit
                                   </Button>
-                                </deleteFetcher.Form>
-                              </div>
-                            )}
+                                  <deleteFetcher.Form method="post">
+                                    <input
+                                      type="hidden"
+                                      name="intent"
+                                      value="delete-comment"
+                                    />
+                                    <input
+                                      type="hidden"
+                                      name="commentId"
+                                      value={reply.id}
+                                    />
+                                    <Button
+                                      type="submit"
+                                      variant="ghost"
+                                      size="sm"
+                                      disabled={isDeletingComment}
+                                    >
+                                      Delete
+                                    </Button>
+                                  </deleteFetcher.Form>
+                                </div>
+                              )}
                           </>
                         )}
                       </div>
@@ -1177,6 +1288,7 @@ function CurriculumSidebar({
   currentLessonId,
   lessonProgressMap,
   enrolled,
+  bookmarkedLessonIds,
 }: {
   course: { id: number; title: string; slug: string };
   curriculum: Array<{
@@ -1187,6 +1299,7 @@ function CurriculumSidebar({
   currentLessonId: number;
   lessonProgressMap: Record<number, string>;
   enrolled: boolean;
+  bookmarkedLessonIds: Set<number>;
 }) {
   // Find which module the current lesson belongs to
   const currentModuleId = curriculum.find((m) =>
@@ -1227,6 +1340,9 @@ function CurriculumSidebar({
         <nav className="flex-1 p-2">
           {curriculum.map((mod) => {
             const isExpanded = expandedModules.has(mod.id);
+            const hasBookmarkedLesson = mod.lessons.some((l) =>
+              bookmarkedLessonIds.has(l.id)
+            );
 
             return (
               <div key={mod.id} className="mb-1">
@@ -1241,6 +1357,17 @@ function CurriculumSidebar({
                     )}
                   />
                   <span className="flex-1 text-left">{mod.title}</span>
+                  {hasBookmarkedLesson && (
+                    <>
+                      <Bookmark
+                        aria-hidden="true"
+                        className="size-3.5 shrink-0 fill-amber-500 text-amber-500"
+                      />
+                      <span className="sr-only">
+                        Contains a bookmarked lesson
+                      </span>
+                    </>
+                  )}
                 </button>
 
                 {isExpanded && (
@@ -1276,6 +1403,15 @@ function CurriculumSidebar({
                               <Circle className="size-3.5 shrink-0" />
                             )}
                             <span className="truncate">{l.title}</span>
+                            {bookmarkedLessonIds.has(l.id) && (
+                              <>
+                                <Bookmark
+                                  aria-hidden="true"
+                                  className="ml-auto size-3.5 shrink-0 fill-amber-500 text-amber-500"
+                                />
+                                <span className="sr-only">Bookmarked</span>
+                              </>
+                            )}
                           </Link>
                         </li>
                       );
