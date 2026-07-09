@@ -18,12 +18,13 @@ import {
   getBookmarkedLessonIds,
 } from "./bookmarkService";
 
-function createModuleWithLessons(
-  courseId: number,
-  moduleTitle: string,
-  position: number,
-  lessonCount: number
-) {
+function createModuleWithLessons(opts: {
+  courseId: number;
+  moduleTitle: string;
+  position: number;
+  lessonCount: number;
+}) {
+  const { courseId, moduleTitle, position, lessonCount } = opts;
   const mod = testDb
     .insert(schema.modules)
     .values({ courseId, title: moduleTitle, position })
@@ -51,9 +52,17 @@ describe("bookmarkService", () => {
 
   describe("toggleBookmark", () => {
     it("creates a bookmark when none exists", () => {
-      const { lessons } = createModuleWithLessons(base.course.id, "Module 1", 1, 1);
+      const { lessons } = createModuleWithLessons({
+        courseId: base.course.id,
+        moduleTitle: "Module 1",
+        position: 1,
+        lessonCount: 1,
+      });
 
-      const result = toggleBookmark({ userId: base.user.id, lessonId: lessons[0].id });
+      const result = toggleBookmark({
+        userId: base.user.id,
+        lessonId: lessons[0].id,
+      });
 
       expect(result).toEqual({ bookmarked: true });
       expect(
@@ -62,10 +71,18 @@ describe("bookmarkService", () => {
     });
 
     it("removes the bookmark when one already exists", () => {
-      const { lessons } = createModuleWithLessons(base.course.id, "Module 1", 1, 1);
+      const { lessons } = createModuleWithLessons({
+        courseId: base.course.id,
+        moduleTitle: "Module 1",
+        position: 1,
+        lessonCount: 1,
+      });
 
       toggleBookmark({ userId: base.user.id, lessonId: lessons[0].id });
-      const result = toggleBookmark({ userId: base.user.id, lessonId: lessons[0].id });
+      const result = toggleBookmark({
+        userId: base.user.id,
+        lessonId: lessons[0].id,
+      });
 
       expect(result).toEqual({ bookmarked: false });
       expect(
@@ -74,7 +91,12 @@ describe("bookmarkService", () => {
     });
 
     it("scopes bookmarks per user", () => {
-      const { lessons } = createModuleWithLessons(base.course.id, "Module 1", 1, 1);
+      const { lessons } = createModuleWithLessons({
+        courseId: base.course.id,
+        moduleTitle: "Module 1",
+        position: 1,
+        lessonCount: 1,
+      });
       const otherUser = testDb
         .insert(schema.users)
         .values({
@@ -95,7 +117,12 @@ describe("bookmarkService", () => {
 
   describe("isLessonBookmarked", () => {
     it("returns false when no bookmark exists", () => {
-      const { lessons } = createModuleWithLessons(base.course.id, "Module 1", 1, 1);
+      const { lessons } = createModuleWithLessons({
+        courseId: base.course.id,
+        moduleTitle: "Module 1",
+        position: 1,
+        lessonCount: 1,
+      });
 
       expect(
         isLessonBookmarked({ userId: base.user.id, lessonId: lessons[0].id })
@@ -105,7 +132,12 @@ describe("bookmarkService", () => {
 
   describe("getBookmarkedLessonIds", () => {
     it("returns bookmarked lesson ids scoped to the given course", () => {
-      const { lessons } = createModuleWithLessons(base.course.id, "Module 1", 1, 3);
+      const { lessons } = createModuleWithLessons({
+        courseId: base.course.id,
+        moduleTitle: "Module 1",
+        position: 1,
+        lessonCount: 3,
+      });
 
       toggleBookmark({ userId: base.user.id, lessonId: lessons[0].id });
       toggleBookmark({ userId: base.user.id, lessonId: lessons[2].id });
@@ -119,7 +151,12 @@ describe("bookmarkService", () => {
     });
 
     it("does not include bookmarks from other courses", () => {
-      const { lessons } = createModuleWithLessons(base.course.id, "Module 1", 1, 1);
+      const { lessons } = createModuleWithLessons({
+        courseId: base.course.id,
+        moduleTitle: "Module 1",
+        position: 1,
+        lessonCount: 1,
+      });
       const otherCourse = testDb
         .insert(schema.courses)
         .values({
@@ -132,12 +169,12 @@ describe("bookmarkService", () => {
         })
         .returning()
         .get();
-      const { lessons: otherLessons } = createModuleWithLessons(
-        otherCourse.id,
-        "Module 1",
-        1,
-        1
-      );
+      const { lessons: otherLessons } = createModuleWithLessons({
+        courseId: otherCourse.id,
+        moduleTitle: "Module 1",
+        position: 1,
+        lessonCount: 1,
+      });
 
       toggleBookmark({ userId: base.user.id, lessonId: lessons[0].id });
       toggleBookmark({ userId: base.user.id, lessonId: otherLessons[0].id });
@@ -151,7 +188,12 @@ describe("bookmarkService", () => {
     });
 
     it("returns an empty array when the user has no bookmarks", () => {
-      createModuleWithLessons(base.course.id, "Module 1", 1, 2);
+      createModuleWithLessons({
+        courseId: base.course.id,
+        moduleTitle: "Module 1",
+        position: 1,
+        lessonCount: 2,
+      });
 
       const ids = getBookmarkedLessonIds({
         userId: base.user.id,
